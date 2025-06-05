@@ -60,7 +60,7 @@ def record_user_event(user_id: str, session_id: str, event_type: str, event_data
     if not user_id:
         return
 
-    timestamp = datetime.now()
+    timestamp = datetime.now().isoformat()
     page_url = event_data.get('page_url') if event_data else None
     duration = event_data.get('duration') if event_data else 0
 
@@ -97,6 +97,7 @@ def record_user_event(user_id: str, session_id: str, event_type: str, event_data
 
         # Update user stats based on event type
         if event_type == "session_start":
+            # Only update user stats, do NOT create session or conversation here
             execute_query(
                 """
                 UPDATE users 
@@ -108,75 +109,81 @@ def record_user_event(user_id: str, session_id: str, event_type: str, event_data
                 (page_url, user_id),
                 fetch=False
             )
-            # Record new session row
-            execute_query(
-                """
-                INSERT INTO sessions 
-                  (session_id, user_id, start_time, page_url, message_count, status) 
-                VALUES (%s, %s, %s, %s, 0, 'active')
-                """,
-                (session_id, user_id, timestamp, page_url),
-                fetch=False
-            )
-            # Create new conversation for this session
-            conversation_id = str(uuid.uuid4())
-            execute_query(
-                """
-                INSERT INTO conversations 
-                  (conversation_id, session_id, user_id, start_time, status)
-                VALUES (%s, %s, %s, %s, 'active')
-                """,
-                (conversation_id, session_id, user_id, timestamp),
-                fetch=False
-            )
-            # Insert a "session_start" system message as a user_message
-            execute_query(
-                """
-                INSERT INTO messages 
-                  (message_id, conversation_id, user_id, user_message, timestamp_user)
-                VALUES (UUID(), %s, %s, %s, %s)
-                """,
-                (conversation_id, user_id, 'session_start', timestamp),
-                fetch=False
-            )
 
         elif event_type == "question_asked":
-            # Find the active conversation for this session
-            conv = execute_query(
-                """
-                SELECT conversation_id
-                  FROM conversations
-                 WHERE session_id = %s
-                   AND status = 'active'
-                 ORDER BY start_time DESC
-                 LIMIT 1
-                """,
+            # Check if session exists
+            session = execute_query(
+                "SELECT * FROM sessions WHERE session_id = %s",
                 (session_id,)
             )
-            if conv:
-                conversation_id = conv[0]["conversation_id"]
-                message_id = str(uuid.uuid4())
-                # Insert the user's question into messages (bot_message left NULL)
+            if not session:
+                # Create new session with start_time = event_data['timestamp'] if available
+                session_start_time = event_data.get('timestamp') if event_data and event_data.get('timestamp') else timestamp
+                execute_query(
+                    """
+                    INSERT INTO sessions 
+                      (session_id, user_id, start_time, page_url, message_count, status) 
+                    VALUES (%s, %s, %s, %s, 0, 'active')
+                    """,
+                    (session_id, user_id, session_start_time, page_url),
+                    fetch=False
+                )
+                # Create new conversation for this session
+                conversation_id = str(uuid.uuid4())
+                execute_query(
+                    """
+                    INSERT INTO conversations 
+                      (conversation_id, session_id, user_id, start_time, status)
+                    VALUES (%s, %s, %s, %s, 'active')
+                    """,
+                    (conversation_id, session_id, user_id, session_start_time),
+                    fetch=False
+                )
+                # Insert a "session_start" system message
                 execute_query(
                     """
                     INSERT INTO messages 
-                      (message_id, conversation_id, user_id, user_message, timestamp_user)
-                    VALUES (%s, %s, %s, %s, %s)
+                      (message_id, conversation_id, user_id, message_type, content, timestamp)
+                    VALUES (UUID(), %s, %s, 'system', 'session_start', %s)
                     """,
-                    (message_id, conversation_id, user_id, event_data.get("question", ""), timestamp),
+                    (conversation_id, user_id, session_start_time),
                     fetch=False
                 )
-                # Save message_id for bot response (if needed, e.g., in cache or session)
-                # Update user row: bump total_messages
-                execute_query(
+            else:
+                # Find the active conversation for this session
+                conv = execute_query(
                     """
-                    UPDATE users
-                      SET total_messages = total_messages + 1
-                    WHERE user_id = %s
+                    SELECT conversation_id
+                      FROM conversations
+                     WHERE session_id = %s
+                       AND status = 'active'
+                     ORDER BY start_time DESC
+                     LIMIT 1
                     """,
-                    (user_id,),
-                    fetch=False
+                    (session_id,)
                 )
+                if conv:
+                    conversation_id = conv[0]["conversation_id"]
+                    # Insert the user's question into messages
+                    execute_query(
+                        """
+                        INSERT INTO messages 
+                          (message_id, conversation_id, user_id, message_type, content, timestamp)
+                        VALUES (UUID(), %s, %s, 'user', %s, %s)
+                        """,
+                        (conversation_id, user_id, event_data.get("question", ""), timestamp),
+                        fetch=False
+                    )
+                    # Update user row: bump total_messages
+                    execute_query(
+                        """
+                        UPDATE users
+                          SET total_messages = total_messages + 1
+                        WHERE user_id = %s
+                        """,
+                        (user_id,),
+                        fetch=False
+                    )
 
         elif event_type == "bot_response":
             # Find the active conversation for this session
@@ -193,26 +200,16 @@ def record_user_event(user_id: str, session_id: str, event_type: str, event_data
             )
             if conv:
                 conversation_id = conv[0]["conversation_id"]
-                # Find the latest user message for this conversation and user with no bot_message yet
-                result = execute_query(
+                # Insert the bot's response
+                execute_query(
                     """
-                    SELECT message_id FROM messages
-                    WHERE conversation_id = %s AND user_id = %s AND bot_message IS NULL
-                    ORDER BY timestamp_user DESC LIMIT 1
+                    INSERT INTO messages 
+                      (message_id, conversation_id, user_id, message_type, content, timestamp)
+                    VALUES (UUID(), %s, %s, 'bot', %s, %s)
                     """,
-                    (conversation_id, user_id)
+                    (conversation_id, user_id, event_data.get("response", ""), timestamp),
+                    fetch=False
                 )
-                if result:
-                    message_id = result[0]["message_id"]
-                    execute_query(
-                        """
-                        UPDATE messages
-                        SET bot_message = %s, timestamp_bot = %s
-                        WHERE message_id = %s
-                        """,
-                        (event_data.get("response", ""), timestamp, message_id),
-                        fetch=False
-                    )
 
         elif event_type == "session_end":
             # 1) Find the active conversation
@@ -241,14 +238,14 @@ def record_user_event(user_id: str, session_id: str, event_type: str, event_data
                     (timestamp, timestamp, conversation_id),
                     fetch=False
                 )
-                # 3) Add a "session_end" system message as a user_message
+                # 3) Add a "session_end" system message
                 execute_query(
                     """
                     INSERT INTO messages 
-                      (message_id, conversation_id, user_id, user_message, timestamp_user)
-                    VALUES (UUID(), %s, %s, %s, %s)
+                      (message_id, conversation_id, user_id, message_type, content, timestamp)
+                    VALUES (UUID(), %s, %s, 'system', 'session_end', %s)
                     """,
-                    (conversation_id, user_id, 'session_end', timestamp),
+                    (conversation_id, user_id, timestamp),
                     fetch=False
                 )
                 # 4) Retrieve that duration we just computed
@@ -414,40 +411,81 @@ async def get_session_analytics():
             WHERE status = 'active'
         """)[0]['active_count']
 
-        # Get total sessions today
+        # Get total sessions today (based on first message timestamp)
         today_sessions = execute_query("""
-            SELECT COUNT(*) as today_count 
-            FROM sessions 
-            WHERE DATE(start_time) = CURDATE()
+            SELECT COUNT(DISTINCT s.session_id) as today_count
+            FROM sessions s
+            JOIN messages m ON s.session_id = m.conversation_id
+            WHERE DATE(m.timestamp) = CURDATE()
         """)[0]['today_count']
 
-        # Get average session duration
-        avg_duration = execute_query("""
-            SELECT AVG(duration) as avg_duration 
-            FROM sessions 
-            WHERE duration > 0
-        """)[0]['avg_duration']
+        # Get average session duration (based on first and last message timestamps)
+        avg_duration_result = execute_query("""
+            SELECT AVG(session_duration) as avg_duration FROM (
+                SELECT 
+                    TIMESTAMPDIFF(SECOND, 
+                        (SELECT MIN(m.timestamp) FROM messages m WHERE m.conversation_id = s.session_id),
+                        (SELECT MAX(m2.timestamp) FROM messages m2 WHERE m2.conversation_id = s.session_id)
+                    ) as session_duration
+                FROM sessions s
+                WHERE EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = s.session_id)
+            ) as durations
+        """)
+        avg_duration = avg_duration_result[0]['avg_duration'] if avg_duration_result else 0
 
-        # Get recent sessions with details
+        # Get recent sessions (by last message time)
         recent_sessions = execute_query("""
             SELECT 
                 s.session_id,
                 s.user_id,
-                s.start_time,
-                s.duration,
                 s.page_url,
                 s.message_count,
                 s.status
             FROM sessions s
-            ORDER BY s.start_time DESC
+            ORDER BY s.session_id DESC
             LIMIT 10
         """)
+
+        # For each session, get first and last message timestamps and duration
+        sessions_data = []
+        for session in recent_sessions:
+            times = execute_query(
+                """
+                SELECT 
+                    MIN(timestamp) as start_time,
+                    MAX(timestamp) as end_time
+                FROM messages
+                WHERE conversation_id = %s
+                """,
+                (session['session_id'],)
+            )
+            start_time = times[0]['start_time'] if times and times[0]['start_time'] else None
+            end_time = times[0]['end_time'] if times and times[0]['end_time'] else None
+            # Calculate duration
+            if start_time and end_time:
+                duration_query = execute_query(
+                    "SELECT TIMESTAMPDIFF(SECOND, %s, %s) as duration",
+                    (start_time, end_time)
+                )
+                duration = duration_query[0]['duration'] if duration_query else 0
+            else:
+                duration = 0
+            sessions_data.append({
+                "session_id": session['session_id'],
+                "user_id": session['user_id'],
+                "start_time": start_time,
+                "end_time": end_time,
+                "duration": duration,
+                "page_url": session['page_url'],
+                "message_count": session['message_count'],
+                "status": session['status']
+            })
 
         return {
             "active_sessions": active_sessions or 0,
             "today_sessions": today_sessions or 0,
             "average_duration": round(avg_duration, 2) if avg_duration else 0,
-            "recent_sessions": recent_sessions or []
+            "recent_sessions": sessions_data
         }
     except Error as e:
         print(f"Error in session analytics: {str(e)}")
@@ -518,24 +556,38 @@ async def get_message_analytics():
         # Get message statistics - count each user-bot interaction as 1
         stats = execute_query("""
             SELECT 
-                COUNT(*) as total_messages,
-                COUNT(user_message) as user_messages,
-                COUNT(bot_message) as bot_messages
-            FROM messages
+                COUNT(DISTINCT CASE 
+                    WHEN m1.message_type = 'user' AND m2.message_type = 'bot' 
+                    AND m1.conversation_id = m2.conversation_id 
+                    THEN m1.message_id 
+                END) as total_messages,
+                COUNT(CASE WHEN m1.message_type = 'user' THEN 1 END) as user_messages,
+                COUNT(CASE WHEN m1.message_type = 'bot' THEN 1 END) as bot_messages,
+                COUNT(CASE WHEN m1.message_type = 'system' THEN 1 END) as system_messages
+            FROM messages m1
+            LEFT JOIN messages m2 ON m1.conversation_id = m2.conversation_id 
+                AND m2.message_type = 'bot'
+                AND m2.timestamp > m1.timestamp
+                AND NOT EXISTS (
+                    SELECT 1 FROM messages m3 
+                    WHERE m3.conversation_id = m1.conversation_id 
+                    AND m3.message_type = 'bot'
+                    AND m3.timestamp > m1.timestamp 
+                    AND m3.timestamp < m2.timestamp
+                )
         """)[0]
 
         # Get recent messages with details
         recent_messages = execute_query("""
             SELECT 
-                message_id,
-                conversation_id,
-                user_id,
-                user_message,
-                bot_message,
-                timestamp_user,
-                timestamp_bot
-            FROM messages
-            ORDER BY timestamp_user DESC
+                m.message_id,
+                m.conversation_id,
+                m.user_id,
+                m.message_type,
+                m.content,
+                m.timestamp
+            FROM messages m
+            ORDER BY m.timestamp DESC
             LIMIT 20
         """)
 
@@ -543,6 +595,7 @@ async def get_message_analytics():
             "total_messages": stats['total_messages'] or 0,
             "user_messages": stats['user_messages'] or 0,
             "bot_messages": stats['bot_messages'] or 0,
+            "system_messages": stats['system_messages'] or 0,
             "recent_messages": recent_messages or []
         }
     except Error as e:
@@ -551,6 +604,7 @@ async def get_message_analytics():
             "total_messages": 0,
             "user_messages": 0,
             "bot_messages": 0,
+            "system_messages": 0,
             "recent_messages": []
         }
 
@@ -790,29 +844,15 @@ async def record_chatbot_close(data: dict = Body(...)):
 @router.post("/analytics/session_end", tags=["analytics"])
 async def record_session_end(data: dict = Body(...)):
     try:
-        end_time = data.get('end_time')
-        if end_time:
-            try:
-                if end_time.endswith('Z'):
-                    end_time = end_time[:-1]
-                if '.' in end_time:
-                    end_time = end_time.split('.')[0]
-                end_time = end_time.replace('T', ' ')
-            except Exception as e:
-                print("Error parsing end_time:", e)
-                end_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        else:
-            end_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # Only update duration and status, do not update end_time
         execute_query(
             """
             UPDATE sessions
-            SET end_time = %s,
-                duration = %s,
+            SET duration = %s,
                 status = 'completed'
             WHERE session_id = %s
             """,
             (
-                end_time,
                 data.get('duration', 0),
                 data.get('session_id'),
             ),
@@ -821,41 +861,4 @@ async def record_session_end(data: dict = Body(...)):
         return {"status": "success"}
     except Error as e:
         print(f"Error recording session end: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/messages/latest")
-async def get_latest_message_pair(session_id: str):
-    # Find the latest conversation for this session
-    conv = execute_query(
-        """
-        SELECT conversation_id FROM conversations
-        WHERE session_id = %s
-        ORDER BY start_time DESC LIMIT 1
-        """,
-        (session_id,)
-    )
-    if not conv:
-        return {"user_message": "", "bot_message": ""}
-    conversation_id = conv[0]["conversation_id"]
-
-    # Get latest user_message
-    user_row = execute_query(
-        """
-        SELECT user_message FROM messages
-        WHERE conversation_id = %s AND user_message IS NOT NULL
-        ORDER BY timestamp_user DESC LIMIT 1
-        """,
-        (conversation_id,)
-    )
-    # Get latest bot_message
-    bot_row = execute_query(
-        """
-        SELECT bot_message FROM messages
-        WHERE conversation_id = %s AND bot_message IS NOT NULL
-        ORDER BY timestamp_bot DESC LIMIT 1
-        """,
-        (conversation_id,)
-    )
-    user_message = user_row[0]["user_message"] if user_row else ""
-    bot_message = bot_row[0]["bot_message"] if bot_row else ""
-    return {"user_message": user_message, "bot_message": bot_message} 
+        raise HTTPException(status_code=500, detail=str(e)) 
