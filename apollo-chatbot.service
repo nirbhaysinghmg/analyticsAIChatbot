@@ -1,0 +1,14 @@
+[Unit]
+Description=Apollo Chatbot Backend Service
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/root/apolotyreaibot
+Environment="PATH=/root/apolotyreaibot/venv/bin"
+ExecStart=/root/apolotyreaibot/venv/bin/python app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target 

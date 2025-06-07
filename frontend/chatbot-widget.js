@@ -15,10 +15,9 @@ const HealthcareAIWidget = {
       companyLogo: "/logo.png",
       primaryColor: "#0066cc",
       showButton: true,
-      showGreeting: true,
-      greetingText: "Need help with our Products, Chat with our AI assistant!",
-      introductionText:
-        "Hello! I'm your chatbot assistant. How can I help you today?",
+      showGreeting: false, // Disable greeting
+      greetingText: "",
+      introductionText: "",
       inputPlaceholder: "Ask about products, tyres, or services...",
       ...userConfig,
     };
@@ -73,76 +72,6 @@ const HealthcareAIWidget = {
       }
     }
 
-    // Add greeting message if specified
-    if (config.showGreeting) {
-      const greetingId = "healthcare-ai-greeting";
-      let greeting = document.getElementById(greetingId);
-
-      if (!greeting) {
-        greeting = document.createElement("div");
-        greeting.id = greetingId;
-        greeting.className = "healthcare-ai-greeting";
-        greeting.innerHTML = `
-          <p>${
-            config.greetingText ||
-            "Need help with buying our products? Chat with our AI assistant!"
-          }</p>
-          <span class="greeting-close">&times;</span>
-        `;
-        document.body.appendChild(greeting);
-
-        // Style the greeting
-        Object.assign(greeting.style, {
-          position: "fixed",
-          bottom: "90px",
-          right: "20px",
-          maxWidth: "300px",
-          padding: "15px",
-          backgroundColor: "white",
-          borderRadius: "10px",
-          boxShadow: "0 4px 8px rgba(0,0,0,0.1)",
-          zIndex: "998",
-          transition: "all 0.3s ease",
-        });
-
-        // Close button for greeting
-        const closeBtn = greeting.querySelector(".greeting-close");
-        if (closeBtn) {
-          Object.assign(closeBtn.style, {
-            position: "absolute",
-            top: "5px",
-            right: "10px",
-            cursor: "pointer",
-            fontSize: "18px",
-          });
-
-          closeBtn.addEventListener("click", function (e) {
-            e.stopPropagation();
-            greeting.classList.add("hidden");
-          });
-        }
-
-        // Also allow clicking greeting to open chatbot
-        greeting.addEventListener("click", function (e) {
-          if (
-            e.target !== greeting.querySelector(".greeting-close") &&
-            !greeting.contains(e.target)
-          ) {
-            e.preventDefault();
-            e.stopPropagation();
-            window.openChatbot();
-          }
-        });
-
-        // Auto-hide greeting after 8 seconds
-        setTimeout(() => {
-          if (greeting && !greeting.classList.contains("hidden")) {
-            greeting.classList.add("hidden");
-          }
-        }, 8000);
-      }
-    }
-
     // Render the React ChatWidget, spreading all userConfig entries as props
     ReactDOM.render(<ChatWidget {...config} />, container);
   },
@@ -155,7 +84,6 @@ if (typeof window !== "undefined") {
   window.openChatbot = function () {
     const chatbot = document.getElementById("chatbot");
     const button = document.getElementById("healthcare-ai-button");
-    const greeting = document.getElementById("healthcare-ai-greeting");
 
     if (chatbot) {
       // First make sure it's visible (display block) before removing hidden class
@@ -167,6 +95,5 @@ if (typeof window !== "undefined") {
     }
 
     if (button) button.style.display = "none";
-    if (greeting) greeting.style.display = "none";
   };
 }

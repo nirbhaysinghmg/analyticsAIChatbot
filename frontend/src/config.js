@@ -1,7 +1,7 @@
 // src/config.js
 const config = {
   companyName: "Healthcare AI",
-  companyLogo: "/logo.png",
+  companyLogo: "/assets/images/apollo-tyres-logo-png_seeklogo-314374.png",
   agentName: "Healthcare AI Assistant",
   projectName: "Healthcare AI",
   chatUrl: "ws://localhost:8000/ws", // Changed from ws://localhost:8000/ws/chat

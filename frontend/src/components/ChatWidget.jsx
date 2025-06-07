@@ -50,6 +50,25 @@ const FeedbackPrompt = ({ onYes, onNo }) => (
   </div>
 );
 
+const ThankYouMessage = () => (
+  <div
+    style={{
+      marginTop: 8,
+      marginBottom: 8,
+      background: "#e8f5e9",
+      color: "#2e7d32",
+      borderRadius: 8,
+      padding: 12,
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      animation: "fadeOut 2s ease-in-out forwards",
+    }}
+  >
+    <span>Thank you for your feedback!</span>
+  </div>
+);
+
 const FeedbackForm = ({ onClose, onSubmit }) => {
   const [issues, setIssues] = useState([]);
   const [otherText, setOtherText] = useState("");
@@ -236,6 +255,24 @@ const FeedbackForm = ({ onClose, onSubmit }) => {
     </div>
   );
 };
+
+const styles = `
+  @keyframes fadeOut {
+    0% {
+      opacity: 1;
+    }
+    70% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+`;
+
+const styleSheet = document.createElement("style");
+styleSheet.textContent = styles;
+document.head.appendChild(styleSheet);
 
 const ChatWidget = ({ config: userConfig }) => {
   // Merge config with defaults
@@ -468,7 +505,7 @@ const ChatWidget = ({ config: userConfig }) => {
     try {
       // Capture lead in analytics
       const leadResponse = await fetch(
-        `http://localhost:8000/analytics/leads`,
+        `http://localhost:8008/analytics/leads`,
         {
           method: "POST",
           headers: {
@@ -537,8 +574,14 @@ const ChatWidget = ({ config: userConfig }) => {
     window.openChatbot();
   };
 
+  const [showThankYou, setShowThankYou] = useState(false);
+
   const handleFeedbackYes = () => {
     setFeedbackState((f) => ({ ...f, showPrompt: false, submitted: true }));
+    setShowThankYou(true);
+    setTimeout(() => {
+      setShowThankYou(false);
+    }, 2000);
   };
   const handleFeedbackNo = () => {
     setFeedbackState((f) => ({ ...f, showPrompt: false, showForm: true }));
@@ -553,7 +596,7 @@ const ChatWidget = ({ config: userConfig }) => {
       // Find the last user message
       const lastUserMsg =
         [...chatHistory].reverse().find((m) => m.role === "user")?.text || "";
-      fetch("http://localhost:8000/analytics/human_handover", {
+      fetch("http://localhost:8008/analytics/human_handover", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -590,7 +633,7 @@ const ChatWidget = ({ config: userConfig }) => {
       "";
 
     // Record chatbot close event
-    fetch("http://localhost:8000/analytics/chatbot_close", {
+    fetch("http://localhost:8008/analytics/chatbot_close", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -608,7 +651,7 @@ const ChatWidget = ({ config: userConfig }) => {
     }).catch(() => {});
 
     // Record session end event
-    fetch("http://localhost:8000/analytics/session_end", {
+    fetch("http://localhost:8008/analytics/session_end", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -737,6 +780,9 @@ const ChatWidget = ({ config: userConfig }) => {
                     onNo={handleFeedbackNo}
                   />
                 )}
+              {msg.role === "assistant" &&
+                i === feedbackState.lastAssistantIdx &&
+                showThankYou && <ThankYouMessage />}
               {/* Feedback form if user said No */}
               {msg.role === "assistant" &&
                 i === feedbackState.lastAssistantIdx &&

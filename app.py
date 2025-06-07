@@ -10,6 +10,7 @@ import pandas as pd
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_chroma import Chroma
 from langchain.text_splitter import CharacterTextSplitter
+from fastapi.staticfiles import StaticFiles
 from langchain.chains import RetrievalQA
 from langchain.chains import ConversationalRetrievalChain
 from langchain_core.documents import Document
@@ -32,6 +33,7 @@ load_dotenv()
 
 # Initialize FastAPI with WebSocket support
 app = FastAPI(title="Google Gen AI RAG App with ChromaDB")
+
 
 # Add CORS middleware with specific origins
 app.add_middleware(
@@ -217,20 +219,27 @@ async def websocket_endpoint_ws(websocket: WebSocket):
         client = websocket.client
         page_url = "unknown"  # Default value
         
-        # Record session start
-        record_user_event(
-            user_id=user_id,
-            session_id=session_id,
-            event_type="session_start",
-            event_data={
-                "page_url": page_url,
-                "timestamp": session_start_time.isoformat(),
-                "connection_type": "websocket",
-                "client_info": {
-                    "host": client.host if hasattr(client, 'host') else 'unknown',
-                    "port": client.port if hasattr(client, 'port') else 'unknown'
-                }
-            }
+        # Create new session
+        execute_query(
+            """
+            INSERT INTO sessions 
+              (session_id, user_id, start_time, page_url, message_count, status) 
+            VALUES (%s, %s, %s, %s, 0, 'active')
+            """,
+            (session_id, user_id, session_start_time.isoformat(), page_url),
+            fetch=False
+        )
+
+        # Create new conversation for this session
+        conversation_id = str(uuid.uuid4())
+        execute_query(
+            """
+            INSERT INTO conversations 
+              (conversation_id, session_id, user_id, start_time, status)
+            VALUES (%s, %s, %s, %s, 'active')
+            """,
+            (conversation_id, session_id, user_id, session_start_time.isoformat()),
+            fetch=False
         )
         
         while True:
@@ -298,6 +307,42 @@ async def websocket_endpoint_ws(websocket: WebSocket):
                             "chat_history_length": len(chat_histories[session_id])
                         }
                     )
+
+                    # Check if conversation exists for this session
+                    conversation = execute_query(
+                        """
+                        SELECT conversation_id 
+                        FROM conversations 
+                        WHERE session_id = %s AND status = 'active'
+                        """,
+                        (session_id,)
+                    )
+
+                    if not conversation:
+                        # Create new conversation if none exists
+                        conversation_id = str(uuid.uuid4())
+                        execute_query(
+                            """
+                            INSERT INTO conversations 
+                            (conversation_id, session_id, user_id, start_time, status)
+                            VALUES (%s, %s, %s, %s, 'active')
+                            """,
+                            (conversation_id, session_id, user_id, message_start_time.isoformat()),
+                            fetch=False
+                        )
+                    else:
+                        conversation_id = conversation[0]['conversation_id']
+
+                    # Insert user message into messages table
+                    execute_query(
+                        """
+                        INSERT INTO messages 
+                        (message_id, conversation_id, user_id, message_type, content, timestamp)
+                        VALUES (UUID(), %s, %s, 'user', %s, %s)
+                        """,
+                        (conversation_id, user_id, message["user_input"], message_start_time.isoformat()),
+                        fetch=False
+                    )
                     
                     # Get chat history from message
                     chat_history = message.get("chat_history", [])
@@ -333,9 +378,19 @@ async def websocket_endpoint_ws(websocket: WebSocket):
                             {
                                 "response": answer,
                                 "timestamp": datetime.now().isoformat(),
-                                # "sources": [doc.metadata["source"] for doc in result.get("source_documents", [])],
                                 "response_time": response_time
                             }
+                        )
+
+                        # Insert bot message into messages table using the same conversation_id
+                        execute_query(
+                            """
+                            INSERT INTO messages 
+                            (message_id, conversation_id, user_id, message_type, content, timestamp)
+                            VALUES (UUID(), %s, %s, 'bot', %s, %s)
+                            """,
+                            (conversation_id, user_id, answer, datetime.now().isoformat()),
+                            fetch=False
                         )
                         
                         # Update chat history
@@ -507,8 +562,8 @@ update_sessions_table()
 
 if __name__ == "__main__":
     import uvicorn
-    print("Starting server on http://0.0.0.0:8000")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print("Starting server on http://0.0.0.0:8008")
+    uvicorn.run(app, host="0.0.0.0", port=8008)
 
 
 

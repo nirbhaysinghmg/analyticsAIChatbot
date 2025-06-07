@@ -54,8 +54,8 @@ def execute_query(query: str, params: tuple = None, fetch: bool = True) -> Optio
     finally:
         if connection and connection.is_connected():
             cursor.close()
-            connection.close()
 
+            connection.close()
 def record_user_event(user_id: str, session_id: str, event_type: str, event_data: Dict = None):
     if not user_id:
         return
